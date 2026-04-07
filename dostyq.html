@@ -1807,6 +1807,155 @@
 </body>
 </html>
 
+const express = require('express');
+const cors = require('cors');
+const fs = require('fs').promises;
+const path = require('path');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.static('public'));
+
+// Деректер файлы
+const DATA_FILE = path.join(__dirname, 'data', 'books.json');
+
+// Деректерді оқу
+async function readData() {
+    try {
+        const data = await fs.readFile(DATA_FILE, 'utf8');
+        return JSON.parse(data);
+    } catch (err) {
+        return { books: [], borrowHistory: {}, comments: {} };
+    }
+}
+
+// Деректерді жазу
+async function writeData(data) {
+    await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2));
+}
+
+// 🔹 БАРЛЫҚ КІТАПТАРДЫ АЛУ
+app.get('/api/books', async (req, res) => {
+    const data = await readData();
+    res.json(data.books);
+});
+
+// 🔹 ТОП ПОПУЛЯРЛЫ КІТАПТАР (Шкала үшін)
+app.get('/api/top-books', async (req, res) => {
+    const data = await readData();
+    const { books, borrowHistory } = data;
+    
+    // Сұрыптау (көбірек алынғандар бірінші)
+    const sorted = Object.entries(borrowHistory)
+        .sort((a, b) => b[1] - a[1])
+        .map(([bookId, count]) => {
+            const book = books.find(b => b.id === parseInt(bookId));
+            return { ...book, borrowCount: count };
+        })
+        .filter(b => b.title); // Жойылған кітаптарды алып тастау
+    
+    res.json(sorted);
+});
+
+// 🔹 СТАТИСТИКА
+app.get('/api/stats', async (req, res) => {
+    const data = await readData();
+    const totalBorrows = Object.values(data.borrowHistory).reduce((a, b) => a + b, 0);
+    
+    res.json({
+        total: data.books.length,
+        available: data.books.filter(b => b.status === 'available').length,
+        borrowed: data.books.filter(b => b.status === 'borrowed').length,
+        reserved: data.books.filter(b => b.status === 'reserved').length,
+        totalBorrows: totalBorrows,
+        topBook: Object.entries(data.borrowHistory).sort((a, b) => b[1] - a[1])[0] || null
+    });
+});
+
+// 🔹 ЖАҢА КІТАП ҚОСУ (R панелі)
+app.post('/api/books', async (req, res) => {
+    const data = await readData();
+    const newBook = {
+        id: Date.now(),
+        ...req.body,
+        status: 'available',
+        addedDate: new Date().toISOString()
+    };
+    
+    data.books.push(newBook);
+    await writeData(data);
+    
+    res.json({ success: true, book: newBook });
+});
+
+// 🔹 КІТАПТЫ АЛУ (Borrow)
+app.post('/api/books/:id/borrow', async (req, res) => {
+    const data = await readData();
+    const book = data.books.find(b => b.id === parseInt(req.params.id));
+    
+    if (!book) return res.status(404).json({ error: 'Кітап табылмады' });
+    if (book.status !== 'available') return res.status(400).json({ error: 'Кітап қолжетімсіз' });
+    
+    const { borrower } = req.body;
+    book.status = 'borrowed';
+    book.borrower = borrower;
+    book.borrowDate = new Date().toISOString().split('T')[0];
+    book.returnDate = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    
+    // Историяға жазу (шкала үшін)
+    data.borrowHistory[book.id] = (data.borrowHistory[book.id] || 0) + 1;
+    
+    await writeData(data);
+    res.json({ 
+        success: true, 
+        book: book,
+        borrowCount: data.borrowHistory[book.id]
+    });
+});
+
+// 🔹 КІТАПТЫ ҚАЙТАРУ
+app.post('/api/books/:id/return', async (req, res) => {
+    const data = await readData();
+    const book = data.books.find(b => b.id === parseInt(req.params.id));
+    
+    if (!book) return res.status(404).json({ error: 'Кітап табылмады' });
+    
+    book.status = 'available';
+    book.borrower = null;
+    book.borrowDate = null;
+    book.returnDate = null;
+    
+    await writeData(data);
+    res.json({ success: true, book: book });
+});
+
+// 🔹 ПІКІР ҚОСУ
+app.post('/api/books/:id/comments', async (req, res) => {
+    const data = await readData();
+    const { name, text } = req.body;
+    
+    if (!data.comments[req.params.id]) {
+        data.comments[req.params.id] = [];
+    }
+    
+    data.comments[req.params.id].push({
+        id: Date.now(),
+        name,
+        text,
+        time: new Date().toISOString()
+    });
+    
+    await writeData(data);
+    res.json({ success: true, comments: data.comments[req.params.id] });
+});
+
+// 🔹 ПІКІРЛЕРДІ АЛУ
+
+
 
 
 
